@@ -26,43 +26,94 @@ scandir="$1"
 detect_f="/tmp/zClamDetect"
 log_f="/var/log/zClamDetect"
 max_chars=1000
+skip_freshclam=1
+
+### Funktions ###
+
+function notify_log # param: String notifiation-txt, String instance
+{
+	msg=$1
+	instance=$2
+	if [ "$instance" == "" ]; then
+	  instance="zClam"
+	fi
+	echo $msg
+	echo "`date +%d.%m.%y` `date +%H:%M:%S` $instance: $msg" >> $log_f
+}
+
+function run_freshclam # no param
+{
+  exec 3> >(zenity --progress --title="zClam - Freshclam" --percentage=0 --auto-close --width=600 --pulsate --text="Virendatenbank updaten")
+  freshclam | xargs -l1 -I%% /bin/bash -c "echo \"freshclam: %%\"; echo \"`date +%d.%m.%y` `date +%H:%M:%S` freshclam: %%\" >> $log_f"
+  exec 3>&-
+}
+
+### MAIN ###
+
+#TODO: Prüfen, ob xServer (und zenity) verfügbar ist
+#Am I root?
+if [ $(id -u) -ne 0 ]; then
+  echo "Please, run this script as root!"
+  exit 1
+fi
+
+#Parse Args
+#TODO: Wenn mehrere Argumente angegeben sind, dann alle parallel scanen in mehreren Prozessen und mit mehreren Log-Dateien
+#TODO: Scip freshclam hinzufügen
+#TODO: --no-root hinzufügen
+if [ "$scandir" == "" ]; then
+  scandir=`zenity --file-selection --directory`
+fi
 
 #Alte Scanergebnisse löschen
-rm -f $detect_f
+rm -f $detect_f 2>/dev/null
 
-
-### Code ###
+#Log Schreiben
+echo "###############################" >> $log_f
+notify_log "Start zClam"
+notify_log "$scandir soll gescant werden"
 
 #Virendatenbank updaten
-#su -c "freshclam"
+if [ "$skip_freshclam" == 0 ]; then
+  run_freshclam
+fi
 
 #Progressbar
-exec 3> >(zenity --progress --title="zClam" --percentage=0 --auto-close --width=600)
-echo "# Starte ClamAV..." >&3
+exec 3> >(zenity --progress --title="zClam - ClamScan" --percentage=0 --auto-close --width=600)
+echo "# Load ClamAV..." >&3
 
 #Ermittle Anzahl an zu scannenden Dateien
 fcount=$(find $scandir -type f | wc -l)
-echo "$fcount Dateien werden gescannt"
+notify_log "$fcount Dateien in $scandir gefunden"
 
 #Scannen
-clamscan -r --no-summary $scandir | nl | xargs -l1 --max-chars=$max_chars -I"%%" echo "$fcount %%" | awk '/[0-9]+/ {percent=$2/$1*100; print percent; print "#"$3" "$4} $NF=="FOUND" { printf $3" " $4" "$NF"\n"  | "cat 1>&2" } ' >&3 2>$detect_f
+clamscan -r --no-summary $scandir | nl | awk -v fcount="$fcount" ' \
+  /[0-9]+/ { \
+    percent=$1/fcount*100; \
+    print percent; \
+    $1=""; print "#"$0 \
+  } \
+  $NF=="FOUND" { \
+    printf $0"\n"  | "cat 1>&2" \
+  } ' >&3 2>$detect_f
+  
 # Anstatt ... $NF=="FOUND" ... könnte man auch $NF!="OK" nehmen
 
-#TODO: BUGFIX: Im Dateinamen könnte auch ein Leerzeichen sein...
-#TODO: Nur starten, wenn das Script rootrechte hat
 #TODO: Virenfund in echtzeit anzeigen, nicht erst dannach!
+#TODO: Auf Abbruch reagieren und den Script stoppen, bzw einen Verweis in der Log-Datei machen
 
 
 #Prüfen, ob Viren gefunden wurden
 errors=$(cat $detect_f )
 if [ "$errors" != "" ]; then
-  echo "Haha du wurdest gehackt"
+  notify_log "Potentiell infizierte Dateien gefunden!"
   cat $detect_f
-  zenity --notification --text="Du Opfer!" 2>/dev/null &
+  cat $detect_f |  xargs -l1 -I%% echo "`date +%d.%m.%y` `date +%H:%M:%S` clamscan [FATAL]: %%" >> $log_f
+  zenity --warning --text="Potentiell infizierte Dateien gefunden!\n`cat $detect_f`\n\nSee $log_f for more details." 2>/dev/null &
 else
-  echo "Er konnte nichts gefunden werden."
+  notify_log "Glückwunsch! Es konnte nichts gefunden werden in $scandir." "clamscan"
+  zenity --info --text="Glückwunsch! Es konnte nichts gefunden werden." 2>/dev/null &
 fi
-#cat $detect_f >> $log_f
 
 exec 3>&-
 

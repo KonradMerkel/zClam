@@ -24,9 +24,9 @@
 ### Config ###
 scandir="$1"
 detect_f="/tmp/zClamDetect"
-log_f="/var/log/zClamDetect"
+log_f="/var/log/zClam.log"
 max_chars=1000
-skip_freshclam=1
+skip_freshclam=0
 
 ### Funktions ###
 
@@ -43,7 +43,7 @@ function notify_log # param: String notifiation-txt, String instance
 
 function run_freshclam # no param
 {
-  exec 3> >(zenity --progress --title="zClam - Freshclam" --percentage=0 --auto-close --width=600 --pulsate --text="Virendatenbank updaten")
+  exec 3> >(zenity --progress --title="zClam - Freshclam" --percentage=0 --auto-close --width=600 --pulsate --no-cancel --text="Virendatenbank updaten")
   freshclam | xargs -l1 -I%% /bin/bash -c "echo \"freshclam: %%\"; echo \"`date +%d.%m.%y` `date +%H:%M:%S` freshclam: %%\" >> $log_f"
   exec 3>&-
 }
@@ -79,7 +79,7 @@ if [ "$skip_freshclam" == 0 ]; then
 fi
 
 #Progressbar
-exec 3> >(zenity --progress --title="zClam - ClamScan" --percentage=0 --auto-close --width=600)
+exec 3> >(zenity --progress --title="zClam - ClamScan" --percentage=0 --no-cancel --auto-close --width=600)
 echo "# Load ClamAV..." >&3
 
 #Ermittle Anzahl an zu scannenden Dateien
@@ -95,20 +95,10 @@ clamscan -r --no-summary $scandir | nl | awk -v fcount="$fcount" ' \
   } \
   $NF=="FOUND" { \
     printf $0"\n"  | "cat 1>&2" \
-  } ' >&3 2>$detect_f
-  
-# Anstatt ... $NF=="FOUND" ... könnte man auch $NF!="OK" nehmen
+  } '   2> >(tee -a $detect_f | xargs -l1 -I%% echo "`date +%d.%m.%y` `date +%H:%M:%S` clamscan [FATAL]: %%" | tee -a $log_f ) >&3
 
-#TODO: Virenfund in echtzeit anzeigen, nicht erst dannach!
-#TODO: Auf Abbruch reagieren und den Script stoppen, bzw einen Verweis in der Log-Datei machen
-
-
-#Prüfen, ob Viren gefunden wurden
 errors=$(cat $detect_f )
 if [ "$errors" != "" ]; then
-  notify_log "Potentiell infizierte Dateien gefunden!"
-  cat $detect_f
-  cat $detect_f |  xargs -l1 -I%% echo "`date +%d.%m.%y` `date +%H:%M:%S` clamscan [FATAL]: %%" >> $log_f
   zenity --warning --text="Potentiell infizierte Dateien gefunden!\n`cat $detect_f`\n\nSee $log_f for more details." 2>/dev/null &
 else
   notify_log "Glückwunsch! Es konnte nichts gefunden werden in $scandir." "clamscan"

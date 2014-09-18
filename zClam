@@ -83,7 +83,7 @@ exec 3> >(zenity --progress --title="zClam - ClamScan" --percentage=0 --no-cance
 echo "# Load ClamAV..." >&3
 
 #Ermittle Anzahl an zu scannenden Dateien
-fcount=$(find $scandir -type f | wc -l)
+fcount=$(find $scandir/ -type f | wc -l)
 notify_log "$fcount Dateien in $scandir gefunden"
 
 #Scannen

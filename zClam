@@ -1,0 +1,68 @@
+#!/bin/bash
+#
+#  zclam - fancy clamscan output with zenity
+# 
+#  2014 Konrad Merkel
+# 
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+# 
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+# 
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+#  MA 02110-1301, USA.
+# 
+# 
+
+### Config ###
+scandir="$1"
+detect_f="/tmp/zClamDetect"
+log_f="/var/log/zClamDetect"
+max_chars=1000
+
+#Alte Scanergebnisse löschen
+rm -f $detect_f
+
+
+### Code ###
+
+#Virendatenbank updaten
+#su -c "freshclam"
+
+#Progressbar
+exec 3> >(zenity --progress --title="zClam" --percentage=0 --auto-close --width=600)
+echo "# Starte ClamAV..." >&3
+
+#Ermittle Anzahl an zu scannenden Dateien
+fcount=$(find $scandir -type f | wc -l)
+echo "$fcount Dateien werden gescannt"
+
+#Scannen
+clamscan -r --no-summary $scandir | nl | xargs -l1 --max-chars=$max_chars -I"%%" echo "$fcount %%" | awk '/[0-9]+/ {percent=$2/$1*100; print percent; print "#"$3" "$4} $NF=="FOUND" { printf $3" " $4" "$NF"\n"  | "cat 1>&2" } ' >&3 2>$detect_f
+# Anstatt ... $NF=="FOUND" ... könnte man auch $NF!="OK" nehmen
+
+#TODO: BUGFIX: Im Dateinamen könnte auch ein Leerzeichen sein...
+#TODO: Nur starten, wenn das Script rootrechte hat
+#TODO: Virenfund in echtzeit anzeigen, nicht erst dannach!
+
+
+#Prüfen, ob Viren gefunden wurden
+errors=$(cat $detect_f )
+if [ "$errors" != "" ]; then
+  echo "Haha du wurdest gehackt"
+  cat $detect_f
+  zenity --notification --text="Du Opfer!" 2>/dev/null &
+else
+  echo "Er konnte nichts gefunden werden."
+fi
+#cat $detect_f >> $log_f
+
+exec 3>&-
+

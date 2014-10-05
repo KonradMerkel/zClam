@@ -1,0 +1,132 @@
+#!/bin/bash
+
+#  install or remove zClam
+#
+#  2014 Konrad Merkel
+
+#Am I root?
+if [ $(id -u) -ne 0 ]; then
+  echo "Please, run this script as root!" >&2
+  exit 1
+fi
+
+# If this script is being run through a symlink, we need to know where
+# in the filesystem the script itself is, not where the symlink is.
+myname="$0"
+if [ -L "$myname" ]; then
+	possibly_my_real_name="`realpath "$myname" 2>/dev/null`"
+	if [ "$?" -eq 0 ]; then
+		myname="$possibly_my_real_name"
+	else
+		# realpath is not available; hopefully readlink -f works.
+		myname="`readlink -f "$myname" 2>/dev/null`"
+		if [ "$?" -ne 0 ]; then
+			# Ugh.
+			echo "zClam-installer cannot be run using a symlink on this operating system." >&2
+			exit 1
+		fi
+	fi
+fi
+
+# Try to be agnostic to where we're being started from, chdir to where
+# the script is.
+mydir="`dirname "$myname"`"
+test -d "$mydir" && cd "$mydir"
+
+decision="install"
+
+if [ -f "/usr/bin/zClam" ]; then
+  chsum_orginal="`md5sum zClam | awk '{printf $1}'`"
+  chsum_installed="`md5sum /usr/bin/zClam | awk '{printf $1}'`"
+  
+  if [ "$chsum_orginal" == "$chsum_installed" ]; then
+    echo "The latest version of zClam is installed (version of the installer). You have two possibilities:"
+    echo " 1) remove zClam from your system"
+    echo " 2) cancel (recommended)"
+    echo "Make your decision (1/2)"
+    read decision
+    if [ "$decision" == "1" ]; then
+      decision="remove"
+    else
+      echo "exit."
+      exit 1
+    fi
+  else
+    echo "zClam is already installed. Possibly an older version. You have three possibilities:"
+    echo " 1) upgrade (or downgrade) the existing installation. (recommended)"
+    echo " 2) remove zClam from your system"
+    echo " 3) cancel"
+    echo "Make your decision (1/2/3)"
+    read decision
+    if [ "$decision" == "2" ]; then
+      decision="remove"
+    elif [ "$decision" == "1" ]; then
+      decision="install"
+    else
+      echo "exit."
+      exit 1
+    fi
+  fi
+else
+  echo "Do want to install zClam? (y/n)"
+  read decision
+  if [ "$decision" != "y" ]; then
+    echo "exit."
+    exit 1
+  else
+    decision="install"
+  fi
+fi
+
+if [ "$decision" == "remove" ]; then
+  echo "Remove zClam"
+  rm -f /usr/bin/zClam
+  
+  echo "Verify Deinstallation"
+  if [ -f "/usr/bin/zClam" ]; then
+    echo "[FAIL] Cannot remove /usr/bin/zClam"
+  else
+    echo "zClam is totaly removed form your system"
+  fi
+  exit 1
+fi
+
+#install
+if [ "$decision" != "install" ]; then
+  echo "exit."
+  exit 1
+fi
+
+if [ -f "./zClam" ]; then
+echo ""
+else
+  echo "Cannot found zClam-Script to install" >&2
+  exit 1
+fi
+
+echo "install zClam"
+cp -f ./zClam /usr/bin/zClam
+if [ "$?" -ne 0 ]; then
+  # Ugh.
+	echo "There are some problems while copy the script to /usr/bin." >&2
+	exit 1
+fi
+
+#verify
+echo "verify the installation"
+if [ -f "/usr/bin/zClam" ]; then
+  chsum_orginal="`md5sum zClam | awk '{printf $1}'`"
+  chsum_installed="`md5sum /usr/bin/zClam | awk '{printf $1}'`"
+  
+  if [ "$chsum_orginal" == "$chsum_installed" ]; then
+    echo "Congratulations. zClam is installed."
+  else
+    echo "[FAIL] Checksum is not right." >&2
+    exit 1
+  fi
+else
+  echo "[FAIL] Something gone wrong. /usr/bin/zClam are not found" >&2
+  exit 1
+fi
+
+

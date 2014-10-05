@@ -50,10 +50,17 @@ function run_freshclam # no param
 
 ### MAIN ###
 
-#TODO: Prüfen, ob xServer (und zenity) verfügbar ist
+#Prüfen, ob xServer verfügbar ist
+if [ "x$DISPLAY" = "x" ]; then
+	echo "zClam must be run within the X Window System." >&2
+	echo "Exiting." >&2
+	exit 1
+fi
+
 #Am I root?
 if [ $(id -u) -ne 0 ]; then
-  echo "Please, run this script as root!"
+  echo "Please, run this script as root!"  >&2
+  echo "Exiting." >&2
   exit 1
 fi
 

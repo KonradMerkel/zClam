@@ -26,13 +26,11 @@ scandir="$1"
 detect_f="/tmp/zClamDetect"
 log_f="/var/log/zClam.log"
 max_chars=1000
-skip_freshclam=0
+skip_freshclam=false
 
 ### Funktions ###
 
 # usage - show help
-# written-by p-f
-# 21.03.2015
 function usage()
 {
   cat - << EOF
@@ -40,8 +38,9 @@ zClam - fancy clamscan output using zenity
 Usage: zClam [OPTIONS] [DIRECTORY]
        zClam [OPTIONS] -- DIRECTORY
 Options:
--h  --help   - shop help
-    --no-run - try to run without root-permissions
+-h  --help      - shop help
+    --no-root   - try to run without root-permissions
+    --no-update - skip freshclam
 EOF
 }
 
@@ -58,8 +57,8 @@ function notify_log # param: String notifiation-txt, String instance
 
 function run_freshclam # no param
 {
-  exec 3> >(zenity --progress --title="zClam - Freshclam" --percentage=0 --auto-close --width=600 --pulsate --no-cancel --text="Virendatenbank updaten")
-  freshclam | xargs -l1 -I%% /usr/bin/echo "freshclam: %%\"; echo \"`date +%d.%m.%y` `date +%H:%M:%S` freshclam: %%\" >> $log_f"
+  exec 3> >(zenity --progress --title="zClam - Freshclam" --percentage=0 --auto-close --width=600 --pulsate --no-cancel --text="Virendatenbank updaten" 2>/dev/null)
+  freshclam | xargs -l1 -I%% /bin/bash -c "echo \"freshclam: %%\"; echo \"`date +%d.%m.%y` `date +%H:%M:%S` freshclam: %%\" >> $log_f"
   exec 3>&-
 }
 
@@ -73,13 +72,11 @@ if [ "x$DISPLAY" = "x" ]; then
 fi
 
 # parse options
-# written-by p-f
-# 21.03.2015
 opt_without_root=false
 getopt -q -T 2>/dev/null
 if [ $? -eq 4 ]; then
-zClam_args=`getopt -n 'zClam' -o h -l help,no-root -- "$@"`
-eval set -- "$zclam_args"
+zClam_args=`getopt -n 'zClam' -o h -l help,no-root,no-update -- "$@"`
+eval set -- "$zClam_args"
 unset zClam_args
 fi
 
@@ -87,18 +84,32 @@ while [ -n "$1" ]
 do
   case $1 in
   -h|--help)
-    usage ;;
+    usage
+    exit 1 ;;
   --no-root)
+    #echo "Script doesn't run with root authority!"
+    if touch "$detect_f" && touch "$log_f"; then
+      echo "User hat Schreibrechte für alle benötigten Dateien."
+    else
+      echo "Verwende andere Log- und Detect-Dateien"
+      detect_f="./zClamDetect"
+      log_f="./zClam.log"
+    fi
     opt_without_root=true ;;
+  --no-update)
+    #echo "Skip freshclam"
+    skip_freshclam=true ;;
   --)
     shift
-    if [ -n "$1" ]; then
+    while [ -n "$1" ] #TODO: Scan every given dir
+    do
       if [ -d "$1" ]; then
-        scandir="$1";
+        scandir="$1"; # BUG: scans only the last
       else
         notify_log "Nicht gefunden: $1"
       fi
-    fi
+      shift
+    done
     ;;
   *)
     shift ;;
@@ -108,10 +119,12 @@ done
 # done parsing options
 
 #Am I root?
-if $opt_without_root || [ $(id -u) -ne 0 ]; then
-  echo "Please run this script as root (or set --no-root option)"  >&2
-  echo "Exiting." >&2
-  exit 1
+if [ $(id -u) -ne 0 ]; then
+  if [ "$opt_without_root" = false ]; then 
+    echo "Please run this script as root (or set --no-root option)"  >&2
+    echo "Exiting." >&2
+    exit 1
+  fi
 fi
 
 if [ -z "$scandir" ]; then
@@ -127,12 +140,12 @@ notify_log "Start zClam"
 notify_log "$scandir soll gescant werden"
 
 #Virendatenbank updaten
-if [ "$skip_freshclam" == 0 ]; then
+if [ "$skip_freshclam" = false ]; then
   run_freshclam
 fi
 
 #Progressbar
-exec 3> >(zenity --progress --title="zClam - ClamScan" --percentage=0 --no-cancel --auto-close --width=600)
+exec 3> >(zenity --progress --title="zClam - ClamScan" --percentage=0 --no-cancel --auto-close --width=600 2>/dev/null)
 echo "# Load ClamAV..." >&3
 
 #Ermittle Anzahl an zu scannenden Dateien

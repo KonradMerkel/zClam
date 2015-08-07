@@ -21,155 +21,279 @@
 # 
 # 
 
-### Config ###
-scandir="$1"
-detect_f="/tmp/zClamDetect"
-log_f="/var/log/zClam.log"
-max_chars=1000
-skip_freshclam=false
+### Options
 
-### Funktions ###
+# Timeformat to be used in the log. (See man date(1) for syntax)
+o_timeformat="[%d.%m.%y/%H:%M:%S]"
+# Show clamscan and freshclam output? (See usage())
+o_verbose=false
+# Uncomment this to specify a default location for the logfile.
+#o_logfile="./zClam.log"
+# Do we need root permissions?
+o_require_root=true
+# Skip freshclam by default?
+o_skip_freshclam=false
+# Path for temporary files.
+o_tmp_path="/tmp"
+
+### Functions
 
 # usage - show help
 function usage()
 {
-  cat - << EOF
+	cat - << EOF
 zClam - fancy clamscan output using zenity
 Usage: zClam [OPTIONS] [DIRECTORY]
-       zClam [OPTIONS] -- DIRECTORY
+			 zClam [OPTIONS] -- DIRECTORY
 Options:
 -h  --help      - shop help
+-l  --log FILE  - write log to FILE
     --no-root   - try to run without root-permissions
     --no-update - skip freshclam
+-v  --verbose   - show all clamscan and freshclam output
 EOF
 }
 
-function notify_log # param: String notifiation-txt, String instance
+
+# Reads the tempfile and builds arguments for zenity
+# Usage: results=$(build_results)
+function build_results
 {
-	msg=$1
-	instance=$2
-	if [ "$instance" == "" ]; then
-	  instance="zClam"
-	fi
-	echo $msg
-	echo "`date +%d.%m.%y` `date +%H:%M:%S` $instance: $msg" >> $log_f
+	local r_line r_file r_type
+	cat $tmpfile | while read r_line
+	do
+		r_file=`echo $r_line | cut -d: -f 1`
+		r_type=`echo $r_line | cut -d: -f 2- | cut -c 2-`
+		echo -n "\"${r_type}\" \"${r_file}\" "
+	done
 }
 
-function run_freshclam # no param
+# Reads clamscan output from stdin and processes data.
+# Usage: clamscan <CLAMSCAN PARAMETERS> | clamscan_helper
+function clamscan_helper
 {
-  exec 3> >(zenity --progress --title="zClam - Freshclam" --percentage=0 --auto-close --width=600 --pulsate --no-cancel --text="Virendatenbank updaten" 2>/dev/null)
-  freshclam | xargs -l1 -I%% /bin/bash -c "echo \"freshclam: %%\"; echo \"`date +%d.%m.%y` `date +%H:%M:%S` freshclam: %%\" >> $log_f"
-  exec 3>&-
+	local _line _lcounter=0
+	while read _line; do
+		# Update progress bar
+		echo "#Scanning $_line" | cut -d: -f 1 >&3
+		echo "$((100*_lcounter/fcount))" >&3
+		((_lcounter++))
+		# (For now) use reversed data to determine whether it was OK, a warning or a virus etc.
+		case `echo "$_line" | rev | cut -d ' ' -f1` in
+			"KO"|"elif")
+				# File was okay or empty.
+				continue
+				;;
+			"deined"|"DNUOF")
+				# File not readable or something was found.
+				echo "$_line" >> $tmpfile
+				;;
+		esac
+	done
+}
+
+# Write something to the log.
+# Usage notify_log MESSAGE [SOURCE]
+function notify_log
+{
+	local _msg=$1
+	local _instance=$2
+	if [ -z "$i_nstance" ]; then
+		instance="zClam"
+	fi
+	echo "$_msg"
+	if [ "$o_logfile" ]; then
+		echo "`date +$o_timeformat`[$_instance] $msg" >> $o_logfile
+	fi
+}
+
+# Runs an update via freshclam and passes given options to freshclam
+# Usage: run_freshclam [OPTIONS]
+function run_freshclam
+{
+	local _freshclam_opts=$1 _freshclam_ret
+	exec 3> >(zenity --progress --title="Updating - zClam" --percentage=0 --auto-close --width=600 --pulsate --no-cancel --text="Updating clamav virus databases..." 2>/dev/null)
+	freshclam _freshclam_opts| vfilter_output "freshclam"
+	_freshclam_ret=$?
+	exec 3>&-
+	# Check exit code (see man freshclam(1))
+	case $_freshclam_ret in
+		0)
+			return 0 ;;
+		40)
+			# Unknown option -> internal error.
+			zerror "Internal error: invalid options for freshclam.\nfreshclam ${_freshclam_opts} returned ${_freshclam_ret}." "zClam internal (freshclam)"
+			return 7 ;;
+		50|51|53|55)
+			# Some error scanning files.
+			zerror "Error reading files. (${_freshclam_ret})" "freshclam"
+			return 1 ;;
+		52|54|58|59)
+			# Some network error.
+			zerror "Failed to download updates. (${_freshclam_ret})" "freshclam"
+			return 2 ;;
+		*)
+			# Something not network or io related.
+			zerror "Your installation of freshclam doesn\'t seem to be set up properly\nor something else went horribly wrong. (${_freshclam_ret})" "freshclam"
+			return 3 ;;
+	esac
+}
+
+# Read from stdin and pass to oecho() if verbose option was set.
+# Usage: | vfilter_output SOURCE
+function vfilter_output()
+{
+	local _line _src=$1
+	[ -z "$_src" ] && _src="zClam"
+	while read _line; do
+		if $o_verbose; then
+			notify_log "$_line" "$_src"
+		fi
+	done
+}
+
+
+# Shows an error box and passes the error to notify_log()
+# Usage: zerror MESSAGE [SOURCE]
+function zerror()
+{
+	local _msg=$1
+	local _src=$2
+	[ -z "$_src" ] && _src="zClam"
+	zenity --error --title "zClam Error - $_src" --text "$_msg" 2> /dev/null
+	notify_log "$1" "$2"
+}
+
+# Same as zerror() except shows an info.
+# Usage: zinfo MESSAGE [SOURCE]
+function zinfo()
+{
+	local _msg=$1
+	local _src=$2
+	[ -z "$_src" ] && _src="zClam"
+	zenity --info --title "zClam" --text "$_msg" 2> /dev/null
+	notify_log "$1" "$2"
 }
 
 ### MAIN ###
 
-#Prüfen, ob xServer verfügbar ist
-if [ "x$DISPLAY" = "x" ]; then
+# Check if we are running in a graphical environment.
+if [ -z "$DISPLAY" ]; then
 	echo "zClam requires a running X Window System." >&2
 	echo "Exiting." >&2
 	exit 1
 fi
 
-# parse options
-opt_without_root=false
+# Parse command line options.
 getopt -q -T 2>/dev/null
 if [ $? -eq 4 ]; then
-zClam_args=`getopt -n 'zClam' -o h -l help,no-root,no-update -- "$@"`
+	# The installed version of getopt supports long options.
+	zClam_args=`getopt -n 'zClam' -o hl:v -l help,no-root,no-update,log:,verbose -- "$@"`
 eval set -- "$zClam_args"
 unset zClam_args
 fi
 
 while [ -n "$1" ]
 do
-  case $1 in
-  -h|--help)
-    usage
-    exit 1 ;;
-  --no-root)
-    #echo "Script doesn't run with root authority!"
-    if touch "$detect_f" && touch "$log_f"; then
-      echo "User hat Schreibrechte für alle benötigten Dateien."
-    else
-      echo "Verwende andere Log- und Detect-Dateien"
-      detect_f="./zClamDetect"
-      log_f="./zClam.log"
-    fi
-    opt_without_root=true ;;
-  --no-update)
-    #echo "Skip freshclam"
-    skip_freshclam=true ;;
-  --)
-    shift
-    while [ -n "$1" ] #TODO: Scan every given dir
-    do
-      if [ -d "$1" ]; then
-        scandir="$1"; # BUG: scans only the last
-      else
-        notify_log "Nicht gefunden: $1"
-      fi
-      shift
-    done
-    ;;
-  *)
-    shift ;;
-  esac
-  shift
+	case $1 in
+	-h|--help)
+		usage
+		exit 1 ;;
+	--no-root)
+		o_require_root=false ;;
+	--no-update)
+		o_skip_freshclam=true ;;
+	-v|--verbose)
+		o_verbose=true ;;
+	--)
+		shift
+		while [ -n "$1" ] #TODO: Scan every given dir
+		do
+			if [ -d "$1" ]; then
+				scandir="$1"; # BUG: scans only the last
+			else
+				notify_log "Directory not found: $1"
+			fi
+			shift
+		done
+		;;
+	*)
+		shift ;;
+	esac
+	shift
 done
-# done parsing options
+# Finished parsing options.
 
-#Am I root?
-if [ $(id -u) -ne 0 ]; then
-  if [ "$opt_without_root" = false ]; then 
-    echo "Please run this script as root (or set --no-root option)"  >&2
-    echo "Exiting." >&2
-    exit 1
-  fi
+# Are we root?
+if $o_require_root && [ $(id -u) -ne 0 ]; then
+	echo "zClam needs to be executed with root permissions. (Use --no-root to ignore this.)"  >&2
+	echo "Exiting." >&2
+	exit 1
+
 fi
 
-if [ -z "$scandir" ]; then
-  scandir=`zenity --file-selection --directory`
+# Select directory to scan.
+while [ -z "$scandir" ]; do
+	scandir=`zenity --file-selection --directory --title "Select directory to scan with zClam" 2>/dev/null`
+	if [ -n "$scandir" ] && [ -d "$scandir" ]; then
+		break
+	else
+		zenity --title "zClam" --question --text "Directory was not set or is not valid.\nTry again?" 2>/dev/null
+		[ $? -eq 1 ] && exit 2
+	fi
+done
+
+# Set temp file (use very long filename for more security)
+tmpfile=`mktemp "/tmp/zClam_$(date +%y%m%d%H%M%S)_XXXXXXXXXX"`
+if [ $? -ne 0 ]; then
+	zerror "Failed to create tempfile. Exiting."
+	exit 3
 fi
 
-#Alte Scanergebnisse löschen
-rm -f $detect_f 2>/dev/null
+notify_log "Started zClam in $scandir"
+$o_verbose && notify_log "Using $tmpfile as tempfile"
 
-#Log Schreiben
-echo "###############################" >> $log_f
-notify_log "Start zClam"
-notify_log "$scandir soll gescant werden"
-
-#Virendatenbank updaten
-if [ "$skip_freshclam" = false ]; then
-  run_freshclam
+# Update clamav's virus databases
+if ! $o_skip_freshclam; then
+	if run_freshclam; then
+		$o_verbose && notify_log
+	fi
 fi
 
-#Progressbar
-exec 3> >(zenity --progress --title="zClam - ClamScan" --percentage=0 --no-cancel --auto-close --width=600 2>/dev/null)
-echo "# Load ClamAV..." >&3
+# Count files (used for progress bar later)
+exec 3> >(zenity --progress --title="Loading - zClam" --percentage=0 --auto-close --width=600 --pulsate --no-cancel --text="Counting files..." 2>/dev/null)
+fcount=$(find $scandir -type f 2>/dev/null | wc -l)
+exec 3>&-
+notify_log "Found $fcount total files in $scandir."
 
-#Ermittle Anzahl an zu scannenden Dateien
-fcount=$(find $scandir/ -type f | wc -l)
-notify_log "$fcount Dateien in $scandir gefunden"
-
-#Scannen
-clamscan -r --no-summary $scandir | nl | awk -v fcount="$fcount" ' \
-  /[0-9]+/ { \
-    percent=$1/fcount*100; \
-    print percent; \
-    $1=""; print "#"$0 \
-  } \
-  $NF=="FOUND" { \
-    printf $0"\n"  | "cat 1>&2" \
-  } '   2> >(tee -a $detect_f | xargs -l1 -I%% echo "`date +%d.%m.%y` `date +%H:%M:%S` clamscan [FATAL]: %%" | tee -a $log_f ) >&3
-
-errors=$(cat $detect_f )
-if [ "$errors" != "" ]; then
-  zenity --warning --text="Potentiell infizierte Dateien gefunden!\n`cat $detect_f`\n\nSee $log_f for more details." 2>/dev/null &
-else
-  notify_log "Glückwunsch! Es konnte nichts gefunden werden in $scandir." "clamscan"
-  zenity --info --text="Glückwunsch! Es konnte nichts gefunden werden." 2>/dev/null &
-fi
-
+# Scan directory and display a nice progress bar
+exec 3> >(zenity --progress --title="Scanning - zClam" --percentage=0 --auto-close --width=600 --text="Starting clamscan..." --no-cancel 2>/dev/null)
+LC_ALL=en clamscan -r --no-summary $scandir | clamscan_helper 2>&1 | vfilter_output "clamscan"
+clamscan_status=$?
 exec 3>&-
 
+# TODO: Make this work. (The '#' after the case practicly disables this.)
+# (Somehow get the exit code of clamscan)
+# Check if clamscan found something (see man clamscan(1) for exit codes)
+case "#$clamscan_status" in
+	0)
+		# Everything is okay.
+		zinfo "No virus found.\nEverything seems okay." "Okay" ;;
+	2)
+		# Some error(s) occured.
+		zerror "Some errors occured. Is clamav set up properly?" "clamscan" ;;
+esac
+
+# Build and show results (if there are any).
+# TODO: Somehow calculate proper windows size.
+results=$(build_results)
+if [ -n "$results" ]; then
+	eval zenity --list --width 600 --height 500 --title '"Results - zClam"' --text '"The following files were found by clamscan:"' --column 'Type' --column 'File' "$results"
+else
+	zinfo "No virus found." "Result"
+fi
+
+# Delete tempfile.
+if [ -f "$tmpfile" ]; then
+	rm "$tmpfile"
+fi
